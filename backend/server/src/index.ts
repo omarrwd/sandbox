@@ -1,4 +1,4 @@
-import path from "path";
+import path, { dirname } from "path";
 import cors from "cors";
 import express, { Express } from "express";
 import dotenv from "dotenv";
@@ -172,13 +172,64 @@ const createLaravelSandbox = async (sandboxId: string) => {
     containers[sandboxId] = await Sandbox.create("laravel-sandbox", {
       timeoutMs: CONTAINER_TIMEOUT,
     });
+    const dirName = "/home/user/myproject";
+    const result = await readProjectFiles(
+      containers[sandboxId].files,
+      dirName,
+      dirName
+    );
     console.log("Laravel sandbox created with ID:", sandboxId);
-    return true;
+    return {
+      files: result.files,
+      fileData: result.fileData,
+    };
   } catch (e) {
     console.error("Error creating Laravel sandbox:", e);
     return false;
   }
 };
+async function readProjectFiles(
+  containerFiles: Filesystem,
+  directory: string,
+  baseDir: string
+): Promise<{ files: (TFolder | TFile)[]; fileData: TFileData[] }> {
+  const result: { files: (TFolder | TFile)[]; fileData: TFileData[] } = {
+    files: [],
+    fileData: [],
+  };
+  const dirContent = await containerFiles.list(directory);
+
+  for (const item of dirContent) {
+    const relativePath = path.relative(baseDir, item.path);
+    if (item.type === "dir") {
+      const folder: TFolder = {
+        id: relativePath,
+        name: path.basename(item.path),
+        type: "folder",
+        children: [],
+      };
+      const subDirResult = await readProjectFiles(
+        containerFiles,
+        item.path,
+        baseDir
+      );
+      folder.children = subDirResult.files;
+      result.files.push(folder);
+      result.fileData.push(...subDirResult.fileData);
+    } else {
+      const file: TFile = {
+        id: relativePath,
+        name: path.basename(item.path),
+        type: "file",
+      };
+      result.files.push(file);
+      const fileContent = await containerFiles.read(item.path);
+      result.fileData.push({ id: relativePath, data: fileContent.toString() });
+    }
+  }
+  console.log("result", result.files);
+  return result;
+}
 io.on("connection", async (socket) => {
   try {
     if (inactivityTimeout) clearTimeout(inactivityTimeout);
@@ -229,6 +280,13 @@ io.on("connection", async (socket) => {
     );
     const isLaravelSandbox = await createLaravelSandbox(data.sandboxId);
     const sandboxFiles = await getSandboxFiles(data.sandboxId);
+    if (isLaravelSandbox && 'files' in isLaravelSandbox && 'fileData' in isLaravelSandbox) {
+      sandboxFiles.files = isLaravelSandbox.files;
+      sandboxFiles.fileData = isLaravelSandbox.fileData;
+    } else {
+      console.error('Failed to create Laravel sandbox');
+      // Handle the error case appropriately
+    }
     const projectDirectory = isLaravelSandbox
       ? "/home/user/myproject"
       : path.join(dirName, "projects", data.sandboxId);
@@ -261,7 +319,6 @@ io.on("connection", async (socket) => {
 
     // Only continue to container setup if a new container was created
     if (createdContainer) {
-      
       // Copy all files from the project to the container
       const promises = sandboxFiles.fileData.map(async (file) => {
         try {
@@ -276,34 +333,11 @@ io.on("connection", async (socket) => {
         }
       });
       await Promise.all(promises);
-  
 
       // Make the logged in user the owner of all project files
       fixPermissions(projectDirectory);
     }
-    async function readProjectFiles(containerFiles: Filesystem, directory: string, baseDir: string): Promise<{ files: (TFolder | TFile)[]; fileData: TFileData[] }> {
-      const result: { files: (TFolder | TFile)[]; fileData: TFileData[] } = { files: [], fileData: [] };
-      const dirContent = await containerFiles.list(directory);
-    
-      for (const item of dirContent) {
-        const relativePath = path.relative(baseDir, item.path);
-        if (item.type === "dir") {
-          const folder: TFolder = { id: relativePath, name: path.basename(item.path), type: "folder", children: [] };
-          const subDirResult = await readProjectFiles(containerFiles, item.path, baseDir);
-          folder.children = subDirResult.files;
-          result.files.push(folder);
-          result.fileData.push(...subDirResult.fileData);
-        } else {
-          const file: TFile = { id: relativePath, name: path.basename(item.path), type: "file" };
-          result.files.push(file);
-          const fileContent = await containerFiles.read(item.path);
-          result.fileData.push({ id: relativePath, data: fileContent.toString() });
-        }
-      }
-    console.log("result", result.files);
-      return result;
-    }
-    
+
     // Start filesystem watcher for the project directory
     const watchDirectory = async (
       directory: string
@@ -820,7 +854,9 @@ io.on("connection", async (socket) => {
                   );
 
                   // Regular expression to match port number
-                  const regex = isLaravelSandbox ? /http:\/\/127\.0\.0\.1:(\d+)/ : /http:\/\/localhost:(\d+)/;
+                  const regex = isLaravelSandbox
+                    ? /http:\/\/127\.0\.0\.1:(\d+)/
+                    : /http:\/\/localhost:(\d+)/;
                   // If a match is found, return the port number
                   const match = cleanedString.match(regex);
                   return match ? match[1] : null;

@@ -179,6 +179,7 @@ const createLaravelSandbox = async (sandboxId: string) => {
       dirName
     );
     console.log("Laravel sandbox created with ID:", sandboxId);
+    console.log("Laravel sandbox created with ID:", result.files);
     return {
       files: result.files,
       fileData: result.fileData,
@@ -201,6 +202,12 @@ async function readProjectFiles(
 
   for (const item of dirContent) {
     const relativePath = path.relative(baseDir, item.path);
+    
+    // Skip the vendor directory
+    if (relativePath === 'vendor' || relativePath.startsWith('vendor/')) {
+      continue;
+    }
+
     if (item.type === "dir") {
       const folder: TFolder = {
         id: relativePath,
@@ -227,9 +234,10 @@ async function readProjectFiles(
       result.fileData.push({ id: relativePath, data: fileContent.toString() });
     }
   }
-  console.log("result", result.files);
+  
   return result;
 }
+
 io.on("connection", async (socket) => {
   try {
     if (inactivityTimeout) clearTimeout(inactivityTimeout);
